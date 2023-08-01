@@ -31,12 +31,12 @@ var authEnabled bool = authUser != ""
 var secretKey string = "tempsecertstring"
 
 type Container struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Image  string `json:"image"`
-	Ports   uint16 `json:"ports"`
-	State  string `json:"state"`
-	Status string `json:"status"`
+	ID     string   `json:"id"`
+	Name   string   `json:"name"`
+	Image  string   `json:"image"`
+	Ports  []uint16 `json:"ports"`
+	State  string   `json:"state"`
+	Status string   `json:"status"`
 }
 
 type PageData struct {
@@ -136,6 +136,7 @@ func main() {
 		api.GET("/", basicAuth) // basicAuth for api calls
 	}
 	api.GET("/containers", basicAuth, ContainerHandler)
+	api.GET("/containers/detail/:containerID", basicAuth, DetailHandler)
 	api.POST("/containers/:action/:containerID", basicAuth, ActionContainer)
 
 	// Start and run the server
@@ -154,33 +155,42 @@ func getContainers() (containers []Container) {
 		panic(err)
 	}
 
-	var runningContainers, otherContainers []Container
 	for index := range containerList {
 		var newContainer Container = Container{
 			ID:     containerList[index].ID,
 			Name:   containerList[index].Names[0][1:],
 			Image:  containerList[index].Image,
-			Ports:   containerList[index].Ports[0].PublicPort,
 			State:  containerList[index].State,
 			Status: containerList[index].Status,
+		}
+		if len(containerList[index].Ports) > 0 {
+			for i := 0; i < len(containerList[index].Ports); i++ {
+				newContainer.Ports = append(newContainer.Ports, containerList[index].Ports[i].PublicPort)
+				//containerList[index].Ports[i].PublicPort
+			}
+			newContainer.Ports = removeDuplicate((newContainer.Ports))
 		}
 		if len(containerList[index].Names[0]) > 30 {
 			newContainer.Name = containerList[index].Names[0][1:26] + "..."
 		}
-		if len(containerList[index].Image) > 30 {
-			newContainer.Image = containerList[index].Image[0:24] + "..."
-		}
 
-		if newContainer.State == "running" {
-			runningContainers = append(runningContainers, newContainer)
-		} else {
-			otherContainers = append(otherContainers, newContainer)
-		}
-		containers = append(runningContainers, otherContainers...)
+    containers = append(containers, newContainer)
 	}
 
 	log.Println(containers)
 	return containers
+}
+
+func removeDuplicate(strSlice []uint16) []uint16 {
+	allKeys := make(map[uint16]bool)
+	list := []uint16{}
+	for _, item := range strSlice {
+		if _, value := allKeys[item]; !value {
+			allKeys[item] = true
+			list = append(list, item)
+		}
+	}
+	return list
 }
 
 func ContainerHandler(c *gin.Context) {
@@ -188,6 +198,39 @@ func ContainerHandler(c *gin.Context) {
 
 	c.Header("Content-Type", "application/json")
 	c.JSON(http.StatusOK, containers)
+}
+
+func DetailHandler(c *gin.Context) {
+	cli, err := client.NewClientWithOpts(client.FromEnv)
+	if err != nil {
+		panic(err)
+	}
+
+	containerid := c.Param("containerID")
+	containeridLength := len(containerid)
+	//action := c.Param("action")
+
+	containers := getContainers()
+
+	match := false
+	var result types.ContainerJSON
+	for i := 0; i < len(containers); i++ {
+		if containers[i].ID[:containeridLength] == containerid {
+			result, err = cli.ContainerInspect(context.Background(), containerid)
+			if err != nil {
+				panic(err)
+			}
+			match = true
+		}
+	}
+
+	if match {
+		c.Header("Content-Type", "application/json")
+		c.JSON(http.StatusOK, result)
+	} else {
+		// this only happens if theres no match
+		c.AbortWithStatus(http.StatusNotFound)
+	}
 }
 
 func ActionContainer(c *gin.Context) {
